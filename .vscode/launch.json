@@ -10,7 +10,7 @@
       "request": "launch",
       "mode": "auto",
       "program": "${fileDirname}",
-      "args": ["--source", "pfp.png"]
+      "args": ["--source", "samples/pfp.png"]
     }
   ]
 }

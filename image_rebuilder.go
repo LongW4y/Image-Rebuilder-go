@@ -17,6 +17,7 @@ import (
 
 // Global variables
 var size int = 4
+var margin float64 = 10
 
 // input arguments Flag struct
 type Flag struct {
@@ -35,7 +36,7 @@ type Image struct {
 	image      image.Image
 }
 
-func parse_flags() Flag {
+func parseFlags() Flag {
 	// Define the flag
 	var flags Flag
 	flag.StringVar(&flags.source, "source", "", "Source image path, cannot be empty.")
@@ -52,7 +53,7 @@ func parse_flags() Flag {
 	}
 
 	// Validate the flags
-	valid, flags := validate_flags(flags)
+	valid, flags := validateFlags(flags)
 	if !valid {
 		flag.Usage()
 		os.Exit(1)
@@ -65,7 +66,7 @@ func parse_flags() Flag {
 	return flags
 }
 
-func validate_flags(flags Flag) (bool, Flag) {
+func validateFlags(flags Flag) (bool, Flag) {
 	// Only source cannot be empty
 	if flags.source == "" {
 		return false, flags
@@ -103,7 +104,7 @@ func validate_flags(flags Flag) (bool, Flag) {
 	return true, flags
 }
 
-func load_image(path string, format string) Image {
+func loadImage(path string, format string) Image {
 	new_image := Image{}
 	new_image.path = path
 	new_image.format = format
@@ -130,7 +131,7 @@ func load_image(path string, format string) Image {
 	return new_image
 }
 
-func get_possible_cuts(image Image) [][]int {
+func getPossibleCuts(image Image) [][]int {
 	// Calculate into how many squares the image can be cut
 	// The square has to be X by X pixels large
 	// The squares in the last row and column can be up to 5% smaller than the rest
@@ -157,19 +158,12 @@ func get_possible_cuts(image Image) [][]int {
 	return possible_cuts
 }
 
-func get_num_of_squares(image Image, square_dimensions []int) int {
-	// Calculate how many squares can fit into the image
-	num_of_squares := 0
-	for i := 0; i < image.dimensions[0]; i += square_dimensions[0] {
-		for j := 0; j < image.dimensions[1]; j += square_dimensions[1] {
-			num_of_squares++
-		}
-	}
-
-	return num_of_squares
+func getNumOfSquares(image Image, square_dimensions []int) int {
+	// Calculate how many squares can fit into the image with the given dimensions
+	return image.dimensions[0] / square_dimensions[0] * image.dimensions[1] / square_dimensions[1]
 }
 
-func generate_n_colors(num int) []color.Color {
+func generateColors(num int) []color.Color {
 	// Generate n colors
 	colors := []color.Color{}
 	for i := 0; i < num; i++ {
@@ -179,15 +173,14 @@ func generate_n_colors(num int) []color.Color {
 	return colors
 }
 
-func assign_color_to_pixel(source_image Image, colors []color.Color, dimensions []int) image.Image {
+func assignColors(source_image Image, new_colors []color.Color, dimensions []int) image.Image {
 	// Assign a color to each pixel in the image
 	// The new should be as close as possible to the original
-	// If a color is used, remove it from the colors list
+	// If a color is used, remove it from the new_colors list
 	// Run it in parallel to speed it up & print the progress
 
-	// Create a new black image
+	// Create a new black image & fill it with black pixels
 	new_image := image.NewRGBA(image.Rect(0, 0, source_image.dimensions[0], source_image.dimensions[1]))
-	// Color the new_image black
 	for i := 0; i < source_image.dimensions[0]; i++ {
 		for j := 0; j < source_image.dimensions[1]; j++ {
 			new_image.Set(i, j, color.RGBA{0, 0, 0, 255})
@@ -195,22 +188,23 @@ func assign_color_to_pixel(source_image Image, colors []color.Color, dimensions 
 	}
 
 	pixels_colored := 0
-	// Assign a color to each pixel, use get_closest_color function to find the closest color
-	for i := 0; i < source_image.dimensions[0]; i += dimensions[0] {
-		for j := 0; j < source_image.dimensions[1]; j += dimensions[1] {
-			square_colors := []color.Color{}
-			for k := i; k < i+dimensions[0]; k++ {
-				for l := j; l < j+dimensions[1]; l++ {
-					square_colors = append(square_colors, source_image.image.At(k, l))
+
+	// Assign a color to each pixel, use getClosestColor function to find the closest color
+	for i := 0; i < source_image.dimensions[0]/dimensions[0]; i += 1 {
+		for j := 0; j < source_image.dimensions[1]/dimensions[1]; j += 1 {
+			// Get the colors of the square
+			single_square_colors := []color.Color{}
+			for k := 0; k < dimensions[0]; k++ {
+				for l := 0; l < dimensions[1]; l++ {
+					single_square_colors = append(single_square_colors, source_image.image.At(i*dimensions[0]+k, j*dimensions[1]+l))
 				}
 			}
-			closest_color, index := get_closest_color(square_colors, colors)
-			colors = append(colors[:index], colors[index+1:]...)
-			for k := i; k < i+dimensions[0]; k++ {
-				for l := j; l < j+dimensions[1]; l++ {
-					new_image.Set(k, l, closest_color)
-				}
-			}
+			// Get the closest color from the colors list to the avg_square_color
+			closest_color, index := getClosestColor(single_square_colors, new_colors)
+			// Remove the color from the colors list
+			new_colors = append(new_colors[:index], new_colors[index+1:]...)
+			// Color the square with the closest color from the colors list
+			new_image.Set(i*dimensions[0], j*dimensions[1], closest_color)
 			// Print the progress by listing the number of pixels colored
 			pixels_colored += dimensions[0] * dimensions[1]
 			fmt.Printf("\rPixels colored: %d/%d", pixels_colored, source_image.dimensions[0]*source_image.dimensions[1])
@@ -220,64 +214,86 @@ func assign_color_to_pixel(source_image Image, colors []color.Color, dimensions 
 	return new_image
 }
 
-func get_closest_color(square_colors []color.Color, list_of_colors []color.Color) (color.Color, int) {
+func getClosestColor(single_square_colors []color.Color, list_of_colors []color.Color) (color.Color, int) {
 	// Get the closest color from the colors list to the avg_square_color
 	// Return the closest color and the index of the color in the colors list
-	// Use the get_color_distance function to find a color with the smallest distance to the avg_square_color
-	avg_square_color := calculate_avg_color(square_colors)
+	// Use the getColorDistance function to find a color with the smallest distance to the avg_square_color
+
+	avg_square_color := GetAvgColor(single_square_colors)
 	closest_color := list_of_colors[0]
+	closest_color_distance := getColorDistance(avg_square_color, closest_color)
 	index := 0
+
 	for i, color := range list_of_colors {
-		if get_color_distance(avg_square_color, color) < get_color_distance(avg_square_color, closest_color) {
+		i_distance := getColorDistance(avg_square_color, color)
+
+		// Check if i_distance is smaller than margin
+		if i_distance <= margin {
+			return color, i
+		}
+
+		if closest_color_distance < i_distance {
 			closest_color = color
 			index = i
+			closest_color_distance = i_distance
 		}
 	}
 
+	// If no color is close enough, return the closest color
 	return closest_color, index
+
 }
 
-func get_color_distance(source_color color.Color, target_color color.Color) int {
+func getColorDistance(source_color color.Color, target_color color.Color) float64 {
 	// Get the distance between two colors
 	// The distance is calculated as the sum of the differences between the red, green and blue values
+
 	R1, G1, B1, A1 := source_color.RGBA()
 	R2, G2, B2, A2 := target_color.RGBA()
-	return int(math.Abs(float64(R1-R2)) + math.Abs(float64(G1-G2)) + math.Abs(float64(B1-B2)) + math.Abs(float64(A1-A2)))
+
+	// Calculate the distance as the element of the sum of the four differences between the RGBA values
+	return math.Sqrt(math.Pow(float64(R1-R2), 2) + math.Pow(float64(G1-G2), 2) + math.Pow(float64(B1-B2), 2) + math.Pow(float64(A1-A2), 2))
 }
 
-func calculate_avg_color(colors []color.Color) color.Color {
+func GetAvgColor(colors []color.Color) color.Color {
 	// Calculate average RGBA values for a list of colors
 
+	// If there is only one color, return the value of that color
+	if len(colors) == 1 {
+		return colors[0]
+	}
+
 	// Define a list
-	Rs := []int{}
-	Gs := []int{}
-	Bs := []int{}
-	As := []int{}
+	Rs, Gs, Bs, As := []uint32{}, []uint32{}, []uint32{}, []uint32{}
 
 	// Get the RGBA values for each color
 	for _, color := range colors {
 		R, G, B, A := color.RGBA()
-		Rs = append(Rs, int(R))
-		Gs = append(Gs, int(G))
-		Bs = append(Bs, int(B))
-		As = append(As, int(A))
+		Rs = append(Rs, R)
+		Gs = append(Gs, G)
+		Bs = append(Bs, B)
+		As = append(As, A)
 	}
 
-	// Calculate the average RGBA values
-	return color.RGBA{uint8(get_avg(Rs)), uint8(get_avg(Gs)), uint8(get_avg(Bs)), uint8(get_avg(As))}
+	return color.RGBA{uint8(getAvgUint32(Rs)), uint8(getAvgUint32(Gs)), uint8(getAvgUint32(Bs)), uint8(getAvgUint32(As))}
 }
 
-func get_avg(list []int) int {
+func getAvgUint32(list []uint32) uint32 {
+	// Check if the list is just one element long
+	if len(list) == 1 {
+		return list[0]
+	}
+
 	// Calculate the average of a list of integers
-	sum := 0
+	var sum uint32 = 0
 	for _, num := range list {
 		sum += num
 	}
 
-	return sum / len(list)
+	return sum / uint32(len(list))
 }
 
-func save_image(output image.Image, format string, filename string) {
+func saveImage(output image.Image, format string, filename string) {
 	// Save the image in format `format` as `filename`
 	file, err := os.Create(filename + format)
 	if err != nil {
@@ -295,20 +311,20 @@ func save_image(output image.Image, format string, filename string) {
 func main() {
 	// Start the timer
 	start := time.Now()
-	flags := parse_flags()
-	image := load_image(flags.source, flags.input_format)
-	possible_cuts := get_possible_cuts(image)
-	num_of_squares := get_num_of_squares(image, possible_cuts[0])
-	colors := generate_n_colors(num_of_squares)
+	flags := parseFlags()
+	image := loadImage(flags.source, flags.input_format)
+	possible_cuts := getPossibleCuts(image)
+	num_of_squares := getNumOfSquares(image, possible_cuts[0])
+	colors := generateColors(num_of_squares)
 
 	// Color the new image
-	output := assign_color_to_pixel(image, colors, possible_cuts[0])
+	output := assignColors(image, colors, possible_cuts[0])
 
 	// Save the new image
-	save_image(output, flags.output_format, flags.output)
+	saveImage(output, flags.output_format, flags.output)
 	// Stop the timer
 	elapsed := time.Since(start)
-	fmt.Printf("Time elapsed: %s\n", elapsed)
+	fmt.Printf("\nTime elapsed: %s\n", elapsed)
 }
 
 // TODOs:
